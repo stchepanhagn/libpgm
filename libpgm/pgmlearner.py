@@ -973,3 +973,43 @@ class PGMLearner():
         return bn
 
 
+    def hybn_mte_estimateparams(self, graphskeleton, data):
+        
+        def empirical_density(variable, possible_values, samples):
+            m = 2 # For now, we'll follow this guidline. Later we should study further on a good choice for this variable
+            
+            intervals = []
+            for i in range(m):
+                intervals.append(possible_values[(i*(len(possible_values)/m)):((i*m) + (len(possible_values)/m))])
+
+            n = [0 for _ in range(m)]
+            x = [None for _ in range(m)]
+            y = [0 for _ in range(m)]
+            not_found = set()
+                
+            for i in range(m):
+                # Compute n_i as the number of points in x inside interval I_i
+                for sample in samples:
+                    if sample[variable] in intervals[i]:
+                        n[i] += 1
+                    else:
+                        not_found.add(sample[variable])
+                # Let x'_i be the central point of interval I_i
+                x[i] = intervals[i][(len(intervals[i])/2)] # TODO: Review the calculation for the centre choice
+            
+            for i in range(m):
+                # Compute y_i
+                y[i] = n[i] / float((len(samples) * len(intervals[i])))
+            
+            return (x, y)
+        
+        for node in graphskeleton.V:
+            
+            possible_values = set()
+            for row in data:
+                possible_values.add(row[node])
+            
+            x, y = empirical_density(node, list(possible_values), data)
+            print 'Result:', x, y
+        
+        pass
