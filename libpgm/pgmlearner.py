@@ -36,6 +36,7 @@ except ImportError:
 
 try: 
     from scipy.stats import chisquare
+    from scipy.optimize import curve_fit
 except ImportError:
     raise ImportError, "scipy is not installed on your system."
 
@@ -975,41 +976,191 @@ class PGMLearner():
 
     def hybn_mte_estimateparams(self, graphskeleton, data):
         
-        def empirical_density(variable, possible_values, samples):
-            m = 2 # For now, we'll follow this guidline. Later we should study further on a good choice for this variable
+        def empirical_density(variable, domain, samples, m=5): # TODO: Rethink value of m
+            '''
+            Transforms a set of samples x into another set x' by breaking the variable's domain into intervals.
             
-            intervals = []
-            for i in range(m):
-                intervals.append(possible_values[(i*(len(possible_values)/m)):((i*m) + (len(possible_values)/m))])
+            Returns: a new set of samples with the centers of the intervals and their frequencies y. 
+            '''
 
-            n = [0 for _ in range(m)]
-            x = [None for _ in range(m)]
-            y = [0 for _ in range(m)]
-            not_found = set()
+            interval_size = (domain[1] - domain[0]) / m
+            intervals = []
+            j = domain[0]
+            for i in range(m):
+                intervals.append((j, j + interval_size))
+                j += interval_size
+
+            n = [.0 for _ in range(m)]
+            x = [.0 for _ in range(m)]
+            y = [.0 for _ in range(m)]
                 
             for i in range(m):
                 # Compute n_i as the number of points in x inside interval I_i
                 for sample in samples:
-                    if sample[variable] in intervals[i]:
+                    if sample[variable] >= intervals[i][0] and sample[variable] < intervals[i][1]:
                         n[i] += 1
-                    else:
-                        not_found.add(sample[variable])
+
                 # Let x'_i be the central point of interval I_i
-                x[i] = intervals[i][(len(intervals[i])/2)] # TODO: Review the calculation for the centre choice
+                x[i] = np.median(intervals[i])
             
             for i in range(m):
                 # Compute y_i
-                y[i] = n[i] / float((len(samples) * len(intervals[i])))
-            
+                try:
+                    y[i] = n[i] / float((len(samples) * len(intervals[i])))
+                except ZeroDivisionError:
+                    if samples:
+                        print 'there is one or more empty intervals.'
+                    else:
+                        print 'no samples to learn from.'
+
             return (x, y)
+            
+        def initialisation(transformed_samples):
+            '''
+            '''
+            m = len(transformed_samples[0])
+            
+            y = [.0 for _ in range((m-1))]
+            x = [.0 for _ in range((m-1))]
+            
+            for i in range((m-1)):
+                y[i] = (transformed_samples[1][i+1] - transformed_samples[1][i]) / (transformed_samples[0][i+1] - transformed_samples[0][i])
+                x[i] = (transformed_samples[0][i] + transformed_samples[0][i+1]) / 2
+                
+            def fit_func(x, a, b):
+                return a * np.exp(b * x)
+            
+            popt, pocv = curve_fit(fit_func, np.array(x), np.array(y), p0=(1, 1e-6))
+
+            b = popt[1]
+            a = (popt[0] / b)
+            s = .0
+
+            for i in range((m-1)):
+                s += y[i] - a * np.exp(b * x[i])
+
+            k = (s / (m-1))
+            
+            return (a, b, k)
+            
+        def mte_fitting(a, b, k, n, samples):
+            m = len(samples)
+            c = .0
+            d = .0
+            e = float('inf')
+            previous_set = None
+            
+            for _ in range(n):
+                w = np.array((np.array(samples[1]) - (a * np.exp(b * np.array(samples[0]))) - k))
+            
+                print 'w', w
+                l = np.min(w)
+                print 'l', l
+                if l < 0:
+                    w += np.abs(l)
+                print 'w', w
+            
+                def fit_func(x, c, d):
+                    return c * np.exp(d * x)
+ 
+                popt, pocv = curve_fit(fit_func, np.array(samples[0]), np.array(w), p0=(c, d))
+ 
+                print 'popt2', popt
+            
+                proto_c = popt[0]
+                proto_d = popt[1]
+            
+                s = .0
+                for i in range(m):
+                    s += (k + (a * np.exp(b * samples[0][i])) + (proto_c * np.exp(proto_d * samples[0][i])) - samples[1][i]) ** 2
+                mse = s / m
+ 
+                if mse < e:
+                    def h(x, y, a, b, c, d, k):
+                        s = .0
+                        n = len(x)
+                    
+                        nominator = .0
+                        denominator = .0
+                    
+                        for i in range(n):
+                            nominator += ((y[i] - (a * np.exp((b * x[i] - k)))) * (np.exp(d * x[i])))
+                            denominator += (c * np.exp(2 * d * x[i]))
+                
+                        return (nominator / denominator)
+                
+                    c = h(samples[0], samples[1], a, b, proto_c, proto_d, k) * proto_c
+                    d = proto_d
+                    e = mse
+ 
+                w = np.array((np.array(samples[1]) - (c * np.exp(d * np.array(samples[0]))) - k))
+ 
+                print 'w', w
+                l = np.min(w)
+                print 'l', l
+                if l < 0:
+                    w += np.abs(l)
+                print 'w', w
+ 
+                def fit_func2(x, a, b):
+                    return a * np.exp(b * x)
+ 
+                popt, pocv = curve_fit(fit_func2, np.array(samples[0]), np.array(w), p0=(a, b))
+ 
+                proto_a = popt[0]
+                proto_b = popt[1]
+ 
+                s = .0
+                for i in range(m):
+                    s += (k + (proto_a * np.exp(proto_b * samples[0][i])) + (c * np.exp(d * samples[0][i])) - samples[1][i]) ** 2
+                mse = s / m
+ 
+                if mse < e:
+                    a = proto_a * h(samples[0], samples[1], proto_a, proto_b, c, d, k)
+                    b = proto_b
+                    e = mse
+ 
+                s = .0
+
+                for i in range(m):
+                    s += samples[1][i] - a * np.exp(b * samples[0][i]) - c * np.exp(d * samples[0][i])
+
+                proto_k = (s / m)
+ 
+                s = .0
+                for i in range(m):
+                    s += (proto_k + (a * np.exp(b * samples[0][i])) + (c * np.exp(d * samples[0][i])) - samples[1][i]) ** 2
+                mse = s / m
+ 
+                if mse < e:
+                    k = proto_k
+                    e = mse
+ 
+                n -= 1
+            
+                print 'estimate', (a, b, c, d, k)
+            
+                if previous_set == (a, b, c, d, k):
+                    break
+                previous_set = (a, b, c, d, k)
+ 
+            return (a, b, c, d, k)
         
-        for node in graphskeleton.V:
-            
-            possible_values = set()
-            for row in data:
-                possible_values.add(row[node])
-            
-            x, y = empirical_density(node, list(possible_values), data)
-            print 'Result:', x, y
+        node = 'Difficulty'
+        sampled_values = []
+        for row in data:
+            sampled_values.append(row[node])
+        
+        domain = (np.min(sampled_values), np.max(sampled_values))
+        
+        m_samples = empirical_density(node, domain, data)
+        print 'Result:', m_samples
+        
+        a, b, k = initialisation(m_samples)
+        
+        print a, b, k
+        
+        params = mte_fitting(a, b, k, 5, m_samples)
+        print params
         
         pass

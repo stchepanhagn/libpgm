@@ -373,7 +373,7 @@ class TestPGMLearner(unittest.TestCase):
     #     self.assertTrue(result.Vdata["Intelligence"]["mean_base"])
         
     def test_hybn_mte_estimateparams(self):
-        result = self.l.hybn_mte_estimateparams(self.skel, self.samplediscseq)
+        result = self.l.hybn_mte_estimateparams(self.skel, self.samplelgseq)
 
 if __name__ == "__main__":
     #import sys;sys.argv = ['', 'Test.testName']
