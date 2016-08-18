@@ -329,7 +329,7 @@ class TestPGMLearner(unittest.TestCase):
         nda = NodeData()
         nda.load("../tests/unittestlgdict.txt")
         self.samplelgbn = LGBayesianNetwork(skel, nda)
-        self.samplelgseq = self.samplelgbn.randomsample(10000)
+        self.samplelgseq = self.samplelgbn.randomsample(60000)
 
         self.skel = skel
 
@@ -373,7 +373,15 @@ class TestPGMLearner(unittest.TestCase):
     #     self.assertTrue(result.Vdata["Intelligence"]["mean_base"])
         
     def test_hybn_mte_estimateparams(self):
-        result = self.l.hybn_mte_estimateparams(self.skel, self.samplelgseq)
+        skel = GraphSkeleton()
+        skel.load("../tests/bn_skeleton.txt")
+        skel.toporder()
+        
+        with open('../tests/dataBR2.json', 'r') as f:
+            samples = eval(f.read())
+
+        result = self.l.hybn_mte_estimateparams(self.skel, self.samplelgseq)        
+        # result = self.l.hybn_mte_estimateparams(skel, samples)
 
 if __name__ == "__main__":
     #import sys;sys.argv = ['', 'Test.testName']

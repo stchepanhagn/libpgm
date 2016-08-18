@@ -26,6 +26,7 @@
 This module provides tools to generate Bayesian networks that are "learned" from a data set. The learning process involves finding the Bayesian network that most accurately models data given as input -- in other words, finding the Bayesian network that makes the data set most likely. There are two major parts of Bayesian network learning: structure learning and parameter learning. Structure learning means finding the graph that most accurately depicts the dependencies detected in the data. Parameter learning means adjusting the parameters of the CPDs in a graph skeleton to most accurately model the data. This module has tools for both of these tasks.
 
 '''
+import matplotlib.pyplot as plt
 import copy
 import json
 import itertools
@@ -976,7 +977,7 @@ class PGMLearner():
 
     def hybn_mte_estimateparams(self, graphskeleton, data):
         
-        def empirical_density(variable, domain, samples, m=5): # TODO: Rethink value of m
+        def empirical_density(variable, domain, samples, m=200): # TODO: Rethink value of m
             '''
             Transforms a set of samples x into another set x' by breaking the variable's domain into intervals.
             
@@ -990,9 +991,9 @@ class PGMLearner():
                 intervals.append((j, j + interval_size))
                 j += interval_size
 
-            n = [.0 for _ in range(m)]
-            x = [.0 for _ in range(m)]
-            y = [.0 for _ in range(m)]
+            n = np.zeros(m)
+            x = np.zeros(m)
+            y = np.zeros(m)
                 
             for i in range(m):
                 # Compute n_i as the number of points in x inside interval I_i
@@ -1006,161 +1007,169 @@ class PGMLearner():
             for i in range(m):
                 # Compute y_i
                 try:
-                    y[i] = n[i] / float((len(samples) * len(intervals[i])))
+                    y[i] = n[i] / float(len(samples) * len(intervals[i]))
                 except ZeroDivisionError:
                     if samples:
                         print 'there is one or more empty intervals.'
                     else:
                         print 'no samples to learn from.'
-
+            
             return (x, y)
             
-        def initialisation(transformed_samples):
+        def funk(x, y, a, b, c=0, d=0):
             '''
+            Helper function to obtain K
             '''
-            m = len(transformed_samples[0])
+            s = .0
+            n = len(x)
+            s = sum(y[i] - (a * np.exp(b * x[i])) - (c * np.exp(d * x[i])) for i in range(n))
+            return (s / n)
             
-            y = [.0 for _ in range((m-1))]
-            x = [.0 for _ in range((m-1))]
+        def initialisation(xdata, ydata):
+            '''
+            '''
+            m = len(x)
+            
+            x_ = np.zeros((m-1))
+            y_ = np.zeros((m-1))
             
             for i in range((m-1)):
-                y[i] = (transformed_samples[1][i+1] - transformed_samples[1][i]) / (transformed_samples[0][i+1] - transformed_samples[0][i])
-                x[i] = (transformed_samples[0][i] + transformed_samples[0][i+1]) / 2
+                y_[i] = (ydata[i+1] - ydata[i]) / (xdata[i+1] - xdata[i])
+                x_[i] = (xdata[i] + xdata[i+1]) / 2
                 
             def fit_func(x, a, b):
                 return a * np.exp(b * x)
             
-            popt, pocv = curve_fit(fit_func, np.array(x), np.array(y), p0=(1, 1e-6))
+            popt, pocv = curve_fit(fit_func, xdata, ydata, p0=(.0, .0))
 
             b = popt[1]
             a = (popt[0] / b)
-            s = .0
-
-            for i in range((m-1)):
-                s += y[i] - a * np.exp(b * x[i])
-
-            k = (s / (m-1))
-            
+            k = funk(x_, y_, a, b)
+            print a, b, k
             return (a, b, k)
             
-        def mte_fitting(a, b, k, n, samples):
-            m = len(samples)
+        def mte_fitting(x, y, a, b, k, n):
+            def funcmse(xdata, ydata, a, b, c, d, k):
+                m = len(x)
+                s = sum(((k + (a * np.exp(b * xdata[i])) + (c * np.exp(d * xdata[i])) - ydata[i]) ** 2) for i in range(m))
+                return (s / m)
+                
+            def h(xdata, ydata, a, b, c, d, k):
+                s = .0
+                n = len(x)
+            
+                nominator = .0
+                denominator = .0
+            
+                for i in range(n):
+                    nominator += ((ydata[i] - (a * np.exp(((b * xdata[i]) - k)))) * (np.exp(d * xdata[i])))
+                    denominator += (c * np.exp(2 * d * xdata[i]))
+        
+                return (nominator / denominator)
+            
+            m = len(x)
+            a = .0
+            b = .0
+            k = .0
             c = .0
             d = .0
             e = float('inf')
             previous_set = None
             
             for _ in range(n):
-                w = np.array((np.array(samples[1]) - (a * np.exp(b * np.array(samples[0]))) - k))
-            
-                print 'w', w
+                w = y - (a * np.exp(b * x)) - k
                 l = np.min(w)
-                print 'l', l
+ 
                 if l < 0:
                     w += np.abs(l)
-                print 'w', w
             
-                def fit_func(x, c, d):
+                def fit_cd_curve(x, c, d):
                     return c * np.exp(d * x)
  
-                popt, pocv = curve_fit(fit_func, np.array(samples[0]), np.array(w), p0=(c, d))
- 
-                print 'popt2', popt
-            
-                proto_c = popt[0]
-                proto_d = popt[1]
-            
-                s = .0
-                for i in range(m):
-                    s += (k + (a * np.exp(b * samples[0][i])) + (proto_c * np.exp(proto_d * samples[0][i])) - samples[1][i]) ** 2
-                mse = s / m
- 
+                popt, pocv = curve_fit(fit_cd_curve, x, w, p0=(c, d))
+                proto_c, proto_d = popt
+                
+                mse = funcmse(x, y, a, b, proto_c, proto_d, k)
+
                 if mse < e:
-                    def h(x, y, a, b, c, d, k):
-                        s = .0
-                        n = len(x)
-                    
-                        nominator = .0
-                        denominator = .0
-                    
-                        for i in range(n):
-                            nominator += ((y[i] - (a * np.exp((b * x[i] - k)))) * (np.exp(d * x[i])))
-                            denominator += (c * np.exp(2 * d * x[i]))
-                
-                        return (nominator / denominator)
-                
-                    c = h(samples[0], samples[1], a, b, proto_c, proto_d, k) * proto_c
+                    c = h(x, y, a, b, proto_c, proto_d, k) * proto_c
                     d = proto_d
                     e = mse
  
-                w = np.array((np.array(samples[1]) - (c * np.exp(d * np.array(samples[0]))) - k))
- 
-                print 'w', w
+                w = y - (c * np.exp(d * x)) - k
                 l = np.min(w)
-                print 'l', l
+
                 if l < 0:
                     w += np.abs(l)
-                print 'w', w
  
-                def fit_func2(x, a, b):
+                def fit_ab_curve(x, a, b):
                     return a * np.exp(b * x)
+
+                popt, pocv = curve_fit(fit_ab_curve, x, w, p0=(a, b))
+
+                proto_a, proto_b = popt
  
-                popt, pocv = curve_fit(fit_func2, np.array(samples[0]), np.array(w), p0=(a, b))
- 
-                proto_a = popt[0]
-                proto_b = popt[1]
- 
-                s = .0
-                for i in range(m):
-                    s += (k + (proto_a * np.exp(proto_b * samples[0][i])) + (c * np.exp(d * samples[0][i])) - samples[1][i]) ** 2
-                mse = s / m
- 
+                mse = funcmse(x, y, proto_a, proto_b, c, d, k)
+
                 if mse < e:
-                    a = proto_a * h(samples[0], samples[1], proto_a, proto_b, c, d, k)
+                    a = h(x, y, proto_a, proto_b, c, d, k) * proto_a
                     b = proto_b
                     e = mse
- 
-                s = .0
 
-                for i in range(m):
-                    s += samples[1][i] - a * np.exp(b * samples[0][i]) - c * np.exp(d * samples[0][i])
+                proto_k = funk(x, y, a, b, c, d)
 
-                proto_k = (s / m)
- 
-                s = .0
-                for i in range(m):
-                    s += (proto_k + (a * np.exp(b * samples[0][i])) + (c * np.exp(d * samples[0][i])) - samples[1][i]) ** 2
-                mse = s / m
- 
+                mse = funcmse(x, y, a, b, c, d, proto_k)
+
                 if mse < e:
                     k = proto_k
                     e = mse
- 
-                n -= 1
-            
-                print 'estimate', (a, b, c, d, k)
-            
+
                 if previous_set == (a, b, c, d, k):
                     break
-                previous_set = (a, b, c, d, k)
  
             return (a, b, c, d, k)
         
-        node = 'Difficulty'
+        def predict(x, a, b, c, d, k):
+            return k + (a * np.exp(b * x)) + (c * np.exp(d * x))
+        
+        node = 'Intelligence'
         sampled_values = []
         for row in data:
             sampled_values.append(row[node])
         
-        domain = (np.min(sampled_values), np.max(sampled_values))
+        domain = (np.min(sampled_values), (np.min(sampled_values) + (np.std(sampled_values) * 2)))
         
-        m_samples = empirical_density(node, domain, data)
-        print 'Result:', m_samples
+        x, y = empirical_density(node, domain, data, m=17)
+        print 'Result:', (x, y)
         
-        a, b, k = initialisation(m_samples)
+        from multiprocessing import Process
+        
+        def matplot(plotx, ploty):
+            plt.plot(plotx, ploty)
+            plt.show()
+        
+        p = Process(target=matplot, args=(x,y,))
+        p.start()
+        
+        a, b, k = initialisation(x, y)
         
         print a, b, k
         
-        params = mte_fitting(a, b, k, 5, m_samples)
+        params = mte_fitting(x, y, a, b, k, 200)
         print params
         
+        a, b, c, d, k = params
+        
+        min_x = 32
+        max_x = 41
+        p_x = [0 for i in range(min_x, max_x)]
+        p_y = [.0 for i in range(min_x, max_x)]
+        for i in range(min_x, max_x):
+            print 'prediction %d'%(i), predict(i, a, b, c, d, k)
+            p_x[i-min_x] = i
+            p_y[i-min_x] = predict(i, a, b, c, d, k)
+        
+        plt.plot(p_x, p_y)
+        plt.show()
+        p.join()
         pass
